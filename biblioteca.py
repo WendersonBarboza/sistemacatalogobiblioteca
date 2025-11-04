@@ -46,7 +46,7 @@ def salvar_dados(tipologia, entries, obs_text):
     filename = get_filename_for_tipologia(tipologia)
     df_local = pd.DataFrame(columns=all_columns)
     if os.path.exists(filename):
-        df_local = pd.read_excel(filename)
+        df_local = pd.read_excel(filename, dtype={'Registro': str})
         # Garante que todas as colunas existam
         for col in all_columns:
             if col not in df_local.columns:
@@ -90,6 +90,9 @@ def salvar_dados(tipologia, entries, obs_text):
         df_local = pd.concat([df_local, novo_registro], ignore_index=True)
         # Reordena colunas antes de salvar
         df_local = df_local[all_columns]
+        # Garante que 'Registro' seja texto para preservar zeros à esquerda no Excel
+        if 'Registro' in df_local.columns:
+            df_local['Registro'] = df_local['Registro'].astype(str)
         df_local.to_excel(filename, index=False)
         messagebox.showinfo("Sucesso", "Dados salvos com sucesso!")
         # Limpa os campos após salvar com sucesso
@@ -119,6 +122,9 @@ def abrir_planilha_geral():
             if col not in df_export.columns:
                 df_export[col] = ""
         df_export = df_export[all_columns]
+        # Garante que 'Registro' seja texto para preservar zeros
+        if 'Registro' in df_export.columns:
+            df_export['Registro'] = df_export['Registro'].astype(str)
         df_export.to_excel(filename, index=False)
         messagebox.showinfo("Sucesso", f"Planilha geral '{filename}' criada com sucesso!")
         if os.name == 'nt': os.startfile(filename)
@@ -175,7 +181,7 @@ def atualizar_visualizacao_pesquisa(df_filtrado=None):
             filename = get_filename_for_tipologia(tipologia)
             if os.path.exists(filename):
                 try:
-                    df_temp = pd.read_excel(filename)
+                    df_temp = pd.read_excel(filename, dtype={'Registro': str})
                     # Garante que todas as colunas existam e ordem padronizada
                     for col in all_columns:
                         if col not in df_temp.columns:
@@ -241,7 +247,7 @@ def excluir_registro():
             return
         
         try:
-            df_local = pd.read_excel(filename)
+            df_local = pd.read_excel(filename, dtype={'Registro': str})
             df_local = df_local[df_local['Registro'].astype(str) != str(registro_para_excluir)]
             df_local.to_excel(filename, index=False)
             messagebox.showinfo("Sucesso", "Registro excluído com sucesso.")
@@ -264,7 +270,16 @@ def editar_registro():
     edit_window.geometry("700x600")
 
     edit_entries = []
-    for i, (key, value) in enumerate(item_values.items()):
+    # Exibe 'Registro' como somente leitura para manter a sequência
+    i = 0
+    for key, value in item_values.items():
+        if key == 'Registro':
+            label = ttk.Label(edit_window, text=f"{key}:")
+            label.grid(row=i // 2, column=(i % 2) * 2, padx=10, pady=5, sticky='w')
+            value_label = ttk.Label(edit_window, text=value)
+            value_label.grid(row=i // 2, column=(i % 2) * 2 + 1, padx=10, pady=5, sticky='w')
+            i += 1
+            continue
         if key not in ['Tipologia', 'Observação']:
             label = ttk.Label(edit_window, text=f"{key}:")
             label.grid(row=i // 2, column=(i % 2) * 2, padx=10, pady=5, sticky='w')
@@ -272,6 +287,7 @@ def editar_registro():
             entry.grid(row=i // 2, column=(i % 2) * 2 + 1, padx=10, pady=5, sticky='ew')
             entry.insert(0, value)
             edit_entries.append({'label': key, 'widget': entry})
+            i += 1
     
     edit_window.grid_columnconfigure(1, weight=1)
     edit_window.grid_columnconfigure(3, weight=1)
@@ -296,7 +312,8 @@ def editar_registro():
 
         original_registro = item_values.get('Registro')
         original_tipologia = item_values.get('Tipologia')
-        novo_registro = novos_dados['Registro']
+        # Registro não é editável: mantém o original
+        novo_registro = original_registro
         nova_tipologia = novos_dados['Tipologia']
 
         try:
@@ -305,7 +322,7 @@ def editar_registro():
             if not os.path.exists(filename_origem):
                 messagebox.showerror("Erro", f"Arquivo de origem '{filename_origem}' não encontrado!", parent=edit_window)
                 return
-            df_origem = pd.read_excel(filename_origem)
+            df_origem = pd.read_excel(filename_origem, dtype={'Registro': str})
             for col in all_columns:
                 if col not in df_origem.columns:
                     df_origem[col] = ""
@@ -315,72 +332,48 @@ def editar_registro():
                 messagebox.showerror("Erro", f"Registro '{original_registro}' não encontrado em '{filename_origem}'.", parent=edit_window)
                 return
 
-            # --- Normalização e validação do 'Registro' numérico com zero-padding ---
-            novo_registro_str = str(novo_registro).strip()
-            if not novo_registro_str.isdigit():
-                messagebox.showerror("Erro", "O campo 'Registro' deve conter apenas números.", parent=edit_window)
-                return
-            # Define o DataFrame de referência para largura: origem ou destino
-            df_ref = None
-            if nova_tipologia == original_tipologia:
-                df_ref = df_origem
-            else:
-                filename_dest_ref = get_filename_for_tipologia(nova_tipologia)
-                if os.path.exists(filename_dest_ref):
-                    df_ref = pd.read_excel(filename_dest_ref)
-                else:
-                    df_ref = pd.DataFrame(columns=all_columns)
-                for col in all_columns:
-                    if col not in df_ref.columns:
-                        df_ref[col] = ""
-            # Calcula largura com base nos registros existentes (numéricos) e mínimo 5
-            existentes_nums_ref = []
-            if 'Registro' in df_ref.columns and not df_ref.empty:
-                for v in df_ref['Registro'].tolist():
-                    s = str(v)
-                    if s.isdigit():
-                        existentes_nums_ref.append(int(s))
-            largura_existente_ref = max([len(str(x)) for x in existentes_nums_ref], default=0)
-            largura_norm = max(5, largura_existente_ref, len(novo_registro_str))
-            novo_registro_norm = str(int(novo_registro_str)).zfill(largura_norm)
-            novos_dados['Registro'] = novo_registro_norm
+            # Mantém o 'Registro' como está, não permitindo alteração manual
+            novos_dados['Registro'] = original_registro
 
             # Se a tipologia não mudou, atualiza no mesmo arquivo
             if nova_tipologia == original_tipologia:
-                # Verifica duplicidade se o número de registro foi alterado
-                if str(novo_registro) != str(original_registro):
-                    registros_existentes = df_origem['Registro'].astype(str)
-                    if (registros_existentes == str(novo_registro)).any():
-                        messagebox.showerror("Erro", f"O Registro '{novo_registro}' já existe nesta planilha!", parent=edit_window)
-                        return
+                # Atualiza todos os campos, exceto 'Registro'
                 for col, val in novos_dados.items():
+                    if col == 'Registro':
+                        continue
                     df_origem.loc[idx, col] = val
                 df_origem = df_origem[all_columns]
+                if 'Registro' in df_origem.columns:
+                    df_origem['Registro'] = df_origem['Registro'].astype(str)
                 df_origem.to_excel(filename_origem, index=False)
             else:
                 # Move o registro: remove do arquivo de origem e adiciona no destino
                 registro_atualizado_dict = df_origem.loc[idx].iloc[0].to_dict()
                 # Aplica novos valores editados
                 for col, val in novos_dados.items():
+                    if col == 'Registro':
+                        continue
                     registro_atualizado_dict[col] = val
                 # Remove do arquivo de origem
                 df_origem = df_origem.drop(idx)
                 df_origem = df_origem[all_columns]
+                if 'Registro' in df_origem.columns:
+                    df_origem['Registro'] = df_origem['Registro'].astype(str)
                 df_origem.to_excel(filename_origem, index=False)
 
                 # Adiciona no arquivo de destino
                 filename_destino = get_filename_for_tipologia(nova_tipologia)
                 if os.path.exists(filename_destino):
-                    df_destino = pd.read_excel(filename_destino)
+                    df_destino = pd.read_excel(filename_destino, dtype={'Registro': str})
                 else:
                     df_destino = pd.DataFrame(columns=all_columns)
                 for col in all_columns:
                     if col not in df_destino.columns:
                         df_destino[col] = ""
-                # Verifica duplicidade do novo Registro no destino
+                # Mantém o 'Registro' original; se duplicado no destino, impede a movimentação
                 if 'Registro' in df_destino.columns and not df_destino.empty:
-                    if str(novo_registro) in df_destino['Registro'].astype(str).tolist():
-                        messagebox.showerror("Erro", f"O Registro '{novo_registro}' já existe na planilha {filename_destino}!")
+                    if str(original_registro) in df_destino['Registro'].astype(str).tolist():
+                        messagebox.showerror("Erro", f"O Registro '{original_registro}' já existe na planilha {filename_destino}! Não é possível mover mantendo a sequência.")
                         return
                 # Converte o dicionário atualizado para DataFrame e concatena
                 registro_df = pd.DataFrame([registro_atualizado_dict])
@@ -391,6 +384,8 @@ def editar_registro():
                 registro_df = registro_df[all_columns]
                 df_destino = pd.concat([df_destino, registro_df], ignore_index=True)
                 df_destino = df_destino[all_columns]
+                if 'Registro' in df_destino.columns:
+                    df_destino['Registro'] = df_destino['Registro'].astype(str)
                 df_destino.to_excel(filename_destino, index=False)
 
             messagebox.showinfo("Sucesso", "Registro atualizado com sucesso.", parent=edit_window)
