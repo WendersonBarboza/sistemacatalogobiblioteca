@@ -8,14 +8,17 @@ from PIL import Image, ImageTk
 import re
 import sys
 import hashlib
+import unicodedata
 
 # --- VARIÁVEIS GLOBAIS ---
 df_global = None # DataFrame em memória para acesso rápido
 
 def get_filename_for_tipologia(tipologia):
     """Gera um nome de arquivo padronizado para uma dada tipologia."""
-    # Remove acentos, espaços e converte para minúsculas para um nome de arquivo seguro
-    safe_name = tipologia.lower().replace(' ', '_').replace('ç', 'c').replace('ã', 'a')
+    # Remove acentos, troca espaços por underscore e converte para minúsculas
+    normalized = unicodedata.normalize('NFKD', tipologia)
+    ascii_only = normalized.encode('ASCII', 'ignore').decode('ASCII')
+    safe_name = ascii_only.lower().replace(' ', '_')
     return f'biblioteca_{safe_name}.xlsx'
 
 # --- FUNÇÕES ---
@@ -35,6 +38,36 @@ def _license_valid():
         return content == hashlib.sha256(b'1480').hexdigest()
     except Exception:
         return False
+
+def _normalize_numero_value(val):
+    """Normaliza o valor do campo 'Número':
+    - se for inteiro, retorna int
+    - se for decimal, retorna float
+    - se não for número, retorna string original
+    """
+    s = str(val).strip().replace(',', '.')
+    if s == "":
+        return ""
+    try:
+        f = float(s)
+        if f.is_integer():
+            return int(f)
+        return f
+    except Exception:
+        return val
+
+def _format_numero_for_display(val):
+    """Formata para exibição na tabela: inteiros sem casas, decimais com ponto ou vírgula do arquivo."""
+    try:
+        s = str(val).strip()
+        if s == "":
+            return ""
+        f = float(s.replace(',', '.'))
+        if f.is_integer():
+            return str(int(f))
+        return str(f)
+    except Exception:
+        return str(val)
 
 def _request_activation(parent):
     for _ in range(3):
@@ -89,6 +122,10 @@ def salvar_dados(tipologia, entries, obs_text):
     if not validar_data(dados.get('Data')):
         messagebox.showwarning("Atenção", "Formato de data inválido. Use DD/MM/AAAA.")
         return
+
+    # Normaliza campo 'Número' antes de salvar
+    if 'Número' in dados:
+        dados['Número'] = _normalize_numero_value(dados.get('Número', ''))
 
     filename = get_filename_for_tipologia(tipologia)
     df_local = pd.DataFrame(columns=all_columns)
@@ -217,6 +254,36 @@ def abrir_planilha():
     except Exception as e:
         messagebox.showerror("Erro", f"Não foi possível abrir o arquivo.\n{e}")
 
+def normalizar_planilhas_existentes():
+    """Garante que todos os arquivos de cada tipologia tenham as colunas 'all_columns' na ordem correta.
+    Não cria arquivos novos; apenas ajusta os que existirem.
+    """
+    try:
+        for tip in tipologias:
+            filename = get_filename_for_tipologia(tip)
+            if not os.path.exists(filename):
+                continue
+            try:
+                df_local = pd.read_excel(filename, dtype={'Registro': str})
+                changed = False
+                for col in all_columns:
+                    if col not in df_local.columns:
+                        df_local[col] = ""
+                        changed = True
+                # Reordena colunas se necessário
+                if list(df_local.columns) != all_columns:
+                    df_local = df_local[all_columns]
+                    changed = True
+                # Garante tipo texto em Registro
+                if 'Registro' in df_local.columns:
+                    df_local['Registro'] = df_local['Registro'].astype(str)
+                if changed:
+                    df_local.to_excel(filename, index=False)
+            except Exception as e:
+                print(f"AVISO: Falha ao normalizar '{filename}': {e}")
+    except Exception as e:
+        print(f"AVISO: Erro geral na normalização: {e}")
+
 def atualizar_visualizacao_pesquisa(df_filtrado=None):
     """Carrega todos os dados de todas as planilhas, os combina e exibe na tabela."""
     global df_global
@@ -258,8 +325,11 @@ def atualizar_visualizacao_pesquisa(df_filtrado=None):
         df_para_mostrar = df_para_mostrar[all_columns]
     
     if df_para_mostrar is not None and not df_para_mostrar.empty:
-        # Evita exibir 'nan' convertendo valores ausentes para vazio antes de str
-        df_temp = df_para_mostrar.fillna("").astype(str)
+        # Evita exibir 'nan' e formata 'Número' para inteiros quando aplicável
+        df_temp = df_para_mostrar.copy()
+        if 'Número' in df_temp.columns:
+            df_temp['Número'] = df_temp['Número'].apply(_format_numero_for_display)
+        df_temp = df_temp.fillna("").astype(str)
         for index, row in df_temp.iterrows():
             result_tree.insert('', tk.END, values=list(row))
 
@@ -270,7 +340,11 @@ def buscar_registro():
         atualizar_visualizacao_pesquisa()
         return
     if df_global is None or df_global.empty: return
-    df_filtrado = df_global[df_global['Registro'].fillna("").astype(str).str.lower().str.contains(termo_busca, na=False)]
+    # Filtra por Registro, Autor ou Título
+    registro_match = df_global['Registro'].fillna("").astype(str).str.lower().str.contains(termo_busca, na=False)
+    autor_match = df_global['Autor'].fillna("").astype(str).str.lower().str.contains(termo_busca, na=False)
+    titulo_match = df_global['Título'].fillna("").astype(str).str.lower().str.contains(termo_busca, na=False)
+    df_filtrado = df_global[registro_match | autor_match | titulo_match]
     atualizar_visualizacao_pesquisa(df_filtrado)
 
 def excluir_registro():
@@ -360,6 +434,10 @@ def editar_registro():
         if not validar_data(novos_dados.get('Data')):
             messagebox.showwarning("Atenção", "Formato de data inválido. Use DD/MM/AAAA.", parent=edit_window)
             return
+
+        # Normaliza campo 'Número'
+        if 'Número' in novos_dados:
+            novos_dados['Número'] = _normalize_numero_value(novos_dados.get('Número', ''))
 
         original_registro = item_values.get('Registro')
         original_tipologia = item_values.get('Tipologia')
@@ -500,9 +578,9 @@ def on_tab_selected(event):
 campos_registro = [
     'Data', 'Registro', 'Autor', 'Título', 'Local', 'Editora',
     'Edição', 'Volume', 'Número', 'Ano', 'Exemplar', 'Quantidade', 'Origem',
-    'Cutter', 'Classificação - CDU', 'Assuntos'
+    'Cutter', 'Classificação - CDU', 'Assuntos', 'Localização'
 ]
-tipologias = ['Livro', 'Folhetos', 'Multimeios', 'Periódicos', 'Plaquetes', 'Obras Raras', 'Folhetos de Cordel', 'Outros']
+tipologias = ['Livro', 'Folhetos', 'Multimeios', 'Periódicos', 'Plaquetes', 'Obras Raras', 'Folhetos de Cordel', 'Obra de Referência', 'Outros']
 all_columns = campos_registro + ['Tipologia', 'Observação'] # Definido globalmente
 
 def create_registration_form(parent_tab, tipologia):
@@ -518,6 +596,45 @@ def create_registration_form(parent_tab, tipologia):
         label.grid(row=i // 2, column=(i % 2) * 2, padx=5, pady=5, sticky='w')
         entry = ttk.Entry(registro_frame, width=40)
         entry.grid(row=i // 2, column=(i % 2) * 2 + 1, padx=5, pady=5, sticky='ew')
+
+        # Mascara automática para Data (DD/MM/AAAA)
+        if campo_text == 'Data':
+            def _on_date_keyrelease(event, widget=entry):
+                txt = widget.get()
+                digits = re.sub(r'\D', '', txt)[:8]
+                formatted = ''
+                if len(digits) >= 2:
+                    formatted += digits[:2]
+                    if len(digits) > 2:
+                        formatted += '/' + digits[2:4]
+                        if len(digits) > 4:
+                            formatted += '/' + digits[4:8]
+                else:
+                    formatted = digits
+                # Evita loop de eventos desnecessários
+                if widget.get() != formatted:
+                    pos = widget.index(tk.INSERT)
+                    widget.delete(0, tk.END)
+                    widget.insert(0, formatted)
+                    try:
+                        widget.icursor(min(pos + (1 if len(formatted) > len(txt) else 0), len(formatted)))
+                    except Exception:
+                        pass
+            entry.bind('<KeyRelease>', _on_date_keyrelease)
+
+        # Validação leve para 'Número' (permite dígitos e separador decimal)
+        if campo_text == 'Número':
+            def _validate_numero(action, new_value):
+                # action: '1' -> inserção, '0' -> deleção
+                if action == '0':
+                    return True
+                s = new_value.strip().replace(',', '.')
+                if s == '':
+                    return True
+                return bool(re.match(r'^\\d*(?:\\.\\d*)?$', s))
+            vcmd = (parent_tab.register(_validate_numero), '%d', '%P')
+            entry.configure(validate='key', validatecommand=vcmd)
+
         entries.append({'label': campo_text, 'widget': entry})
 
     registro_frame.grid_columnconfigure(1, weight=1)
@@ -543,7 +660,7 @@ def create_registration_form(parent_tab, tipologia):
     btn_pesquisar = ttk.Button(botoes_frame, text="Pesquisar Tudo", command=ir_para_pesquisa)
     btn_pesquisar.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
 
-    btn_abrir = ttk.Button(botoes_frame, text="Ver Planilha Excel", command=abrir_planilha)
+    btn_abrir = ttk.Button(botoes_frame, text="Ver Planilha Excel Individual", command=abrir_planilha)
     btn_abrir.pack(side=tk.RIGHT, padx=10, ipadx=10, ipady=5)
 
     return entries, obs_text
@@ -616,7 +733,7 @@ tab_control.add(tab_pesquisa, text='Pesquisar Tudo')
 search_frame = ttk.LabelFrame(tab_pesquisa, text="Filtrar Registros", padding="10")
 search_frame.pack(fill=tk.X, pady=10)
 
-search_label = ttk.Label(search_frame, text="Registro:")
+search_label = ttk.Label(search_frame, text="Registro/Autor/Título:")
 search_label.pack(side=tk.LEFT, padx=5)
 search_entry = ttk.Entry(search_frame, width=30)
 search_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
@@ -653,7 +770,7 @@ for col in all_columns:
     # Define larguras de coluna mais apropriadas, mantendo o alinhamento central
     if col in ['Título', 'Assuntos', 'Observação']:
         result_tree.column(col, width=250, anchor='center')
-    elif col in ['Autor', 'Local', 'Editora']:
+    elif col in ['Autor', 'Local', 'Editora', 'Localização']:
         result_tree.column(col, width=150, anchor='center')
     else:
         result_tree.column(col, width=100, anchor='center')
@@ -667,6 +784,7 @@ result_tree.pack(fill=tk.BOTH, expand=True)
 
 # --- INICIALIZAÇÃO ---
 inicializar_dados() # Carrega os dados na memória ao iniciar
+normalizar_planilhas_existentes() # Atualiza planilhas existentes com novas colunas/ordem
 
 # Inicia o loop da aplicação
 app.mainloop()
