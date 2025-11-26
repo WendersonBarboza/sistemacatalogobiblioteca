@@ -1,0 +1,47 @@
+<html>
+<head>
+  <title>Sistema Biblioteca - Iniciar</title>
+  <HTA:APPLICATION APPLICATIONNAME="Sistema Biblioteca" SCROLL="no" SINGLEINSTANCE="yes" BORDER="thin" CAPTION="yes" SHOWINTASKBAR="yes"/>
+  <style>
+    body { background: #ffffff; margin: 0; font-family: Arial, sans-serif; }
+    .container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 16px; }
+    img { max-height: 180px; cursor: pointer; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    button { padding: 10px 16px; font-size: 14px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; }
+    .hint { color: #666; font-size: 12px; }
+  </style>
+  <script language="javascript">
+    function runApp() {
+      try {
+        var shell = new ActiveXObject('WScript.Shell');
+        // Usa caminhos relativos a este arquivo .hta (independente da pasta/usuário)
+        var exePreferred = ".\\dist\\Sistema de Catalogação da Biblioteca.exe";
+        var exe1 = ".\\dist\\BibliotecaApp.exe";
+        var exe2 = ".\\dist\\SistemaBiblioteca.exe";
+        try { shell.Run('"' + exePreferred + '"', 1, false); }
+        catch (e1) {
+          try { shell.Run('"' + exe1 + '"', 1, false); }
+          catch (e2) { shell.Run('"' + exe2 + '"', 1, false); }
+        }
+        window.close();
+      } catch (e) {
+        alert('Não foi possível iniciar o aplicativo. Verifique se a pasta "dist" está ao lado deste arquivo .hta.\n\nErro: ' + e.message);
+      }
+    }
+    function openImageOrRun() { runApp(); }
+    function onLoad() {
+      // Se a imagem não carregar, mostra botão
+      var img = document.getElementById('logo');
+      img.onerror = function(){ document.getElementById('fallback').style.display = 'block'; };
+    }
+  </script>
+</head>
+<body onload="onLoad()">
+  <div class="container">
+    <img id="logo" src="fcja2.jpg" alt="Fundação" onclick="openImageOrRun()"/>
+    <div id="fallback" style="display:none;">
+      <button onclick="runApp()">Abrir Sistema Biblioteca</button>
+      <div class="hint">Coloque o arquivo fcja2.jpg ao lado deste .hta para exibir a imagem clicável.</div>
+    </div>
+  </div>
+</body>
+</html>

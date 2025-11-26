@@ -9,6 +9,7 @@ import re
 import sys
 import hashlib
 import unicodedata
+import math
 
 # --- VARIÁVEIS GLOBAIS ---
 df_global = None # DataFrame em memória para acesso rápido
@@ -40,34 +41,60 @@ def _license_valid():
         return False
 
 def _normalize_numero_value(val):
-    """Normaliza o valor do campo 'Número':
-    - se for inteiro, retorna int
-    - se for decimal, retorna float
-    - se não for número, retorna string original
+    """Normaliza o valor do campo 'Número' SEM usar float.
+    - se for composto apenas por dígitos, retorna int
+    - caso contrário, retorna a string original (sem conversão numérica)
+    Isso evita que o campo vire 10.0, 10.5 etc. e facilita edição/salvamento.
     """
-    s = str(val).strip().replace(',', '.')
+    s = str(val).strip()
     if s == "":
         return ""
-    try:
-        f = float(s)
-        if f.is_integer():
-            return int(f)
-        return f
-    except Exception:
-        return val
+    if s.isdigit():
+        try:
+            return int(s)
+        except Exception:
+            return s
+    # Qualquer outra coisa permanece como texto
+    return s
 
 def _format_numero_for_display(val):
-    """Formata para exibição na tabela: inteiros sem casas, decimais com ponto ou vírgula do arquivo."""
+    """Formata o campo 'Número' para exibição na tabela.
+    Sempre mostra apenas dígitos (sem casas decimais) ou vazio quando não houver valor.
+    """
+    # Tratar ausentes e NaN
+    if val is None:
+        return ""
+    if isinstance(val, float) and (math.isnan(val)):
+        return ""
+    s = str(val).strip()
+    if s == "" or s.lower() == "nan":
+        return ""
+    # Se conseguir virar inteiro, mostra como inteiro
+    if s.isdigit():
+        return str(int(s))
     try:
-        s = str(val).strip()
-        if s == "":
-            return ""
-        f = float(s.replace(',', '.'))
-        if f.is_integer():
-            return str(int(f))
-        return str(f)
+        i = int(float(s.replace(',', '.')))
+        return str(i)
     except Exception:
-        return str(val)
+        # Em falha de parsing, não exibe nada para evitar lixo na tela
+        return ""
+
+def _normalize_int_field(val):
+    """Normaliza campos que devem ser inteiros (Volume, Ano, Exemplar, Quantidade).
+    - vazio -> ""
+    - somente dígitos -> int
+    - qualquer outra coisa -> texto original (sem lançar erro)
+    """
+    s = str(val).strip()
+    if s == "":
+        return ""
+    if s.isdigit():
+        try:
+            return int(s)
+        except Exception:
+            return s
+    # Se não forem só dígitos, mantém como texto
+    return s
 
 def _request_activation(parent):
     for _ in range(3):
@@ -123,14 +150,21 @@ def salvar_dados(tipologia, entries, obs_text):
         messagebox.showwarning("Atenção", "Formato de data inválido. Use DD/MM/AAAA.")
         return
 
-    # Normaliza campo 'Número' antes de salvar
+    # Normaliza campo 'Número' antes de salvar (inteiro quando possível, senão decimal)
     if 'Número' in dados:
         dados['Número'] = _normalize_numero_value(dados.get('Número', ''))
+
+    # Normaliza campos numéricos inteiros adicionais (Exemplar tratado como texto livre)
+    for campo_int in ['Volume', 'Ano', 'Quantidade']:
+        if campo_int in dados:
+            dados[campo_int] = _normalize_int_field(dados.get(campo_int, ''))
 
     filename = get_filename_for_tipologia(tipologia)
     df_local = pd.DataFrame(columns=all_columns)
     if os.path.exists(filename):
         df_local = pd.read_excel(filename, dtype={'Registro': str})
+        # Normaliza nomes de colunas (remove espaços nas bordas)
+        df_local.columns = [str(c).strip() for c in df_local.columns]
         # Garante que todas as colunas existam
         for col in all_columns:
             if col not in df_local.columns:
@@ -235,6 +269,8 @@ def abrir_planilha():
         # Normaliza a estrutura da planilha para conter todas as colunas (inclui 'Número') na ordem correta
         try:
             df_local_open = pd.read_excel(filename)
+            # Normaliza nomes de colunas
+            df_local_open.columns = [str(c).strip() for c in df_local_open.columns]
             changed = False
             for col in all_columns:
                 if col not in df_local_open.columns:
@@ -265,6 +301,8 @@ def normalizar_planilhas_existentes():
                 continue
             try:
                 df_local = pd.read_excel(filename, dtype={'Registro': str})
+                # Normaliza nomes de colunas
+                df_local.columns = [str(c).strip() for c in df_local.columns]
                 changed = False
                 for col in all_columns:
                     if col not in df_local.columns:
@@ -296,6 +334,8 @@ def atualizar_visualizacao_pesquisa(df_filtrado=None):
             if os.path.exists(filename):
                 try:
                     df_temp = pd.read_excel(filename, dtype={'Registro': str})
+                    # Normaliza nomes de colunas
+                    df_temp.columns = [str(c).strip() for c in df_temp.columns]
                     # Garante que todas as colunas existam e ordem padronizada
                     for col in all_columns:
                         if col not in df_temp.columns:
@@ -325,10 +365,12 @@ def atualizar_visualizacao_pesquisa(df_filtrado=None):
         df_para_mostrar = df_para_mostrar[all_columns]
     
     if df_para_mostrar is not None and not df_para_mostrar.empty:
-        # Evita exibir 'nan' e formata 'Número' para inteiros quando aplicável
+        # Evita exibir 'nan' e formata campos numéricos para inteiros quando aplicável
         df_temp = df_para_mostrar.copy()
-        if 'Número' in df_temp.columns:
-            df_temp['Número'] = df_temp['Número'].apply(_format_numero_for_display)
+        # Formatação para campos inteiros desejados (Exemplar não é formatado como número)
+        for campo_int in ['Número', 'Volume', 'Ano', 'Quantidade']:
+            if campo_int in df_temp.columns:
+                df_temp[campo_int] = df_temp[campo_int].apply(_format_numero_for_display)
         df_temp = df_temp.fillna("").astype(str)
         for index, row in df_temp.iterrows():
             result_tree.insert('', tk.END, values=list(row))
@@ -369,6 +411,8 @@ def excluir_registro():
         
         try:
             df_local = pd.read_excel(filename, dtype={'Registro': str})
+            # Normaliza nomes de colunas
+            df_local.columns = [str(c).strip() for c in df_local.columns]
             df_local = df_local[df_local['Registro'].astype(str) != str(registro_para_excluir)]
             df_local.to_excel(filename, index=False)
             messagebox.showinfo("Sucesso", "Registro excluído com sucesso.")
@@ -393,6 +437,41 @@ def editar_registro():
     edit_entries = []
     # Exibe 'Registro' como somente leitura para manter a sequência
     i = 0
+
+    # Função local para máscara de data (igual à do formulário de cadastro)
+    def _on_date_keyrelease_edit(event, widget=None):
+        if widget is None:
+            return
+        txt = widget.get()
+        digits = re.sub(r'\D', '', txt)[:8]
+        formatted = ''
+        if len(digits) >= 2:
+            formatted += digits[:2]
+            if len(digits) > 2:
+                formatted += '/' + digits[2:4]
+                if len(digits) > 4:
+                    formatted += '/' + digits[4:8]
+        else:
+            formatted = digits
+        if widget.get() != formatted:
+            pos = widget.index(tk.INSERT)
+            widget.delete(0, tk.END)
+            widget.insert(0, formatted)
+            try:
+                widget.icursor(min(pos + (1 if len(formatted) > len(txt) else 0), len(formatted)))
+            except Exception:
+                pass
+
+    # Função local para validar campos numéricos inteiros principais na edição (somente dígitos)
+    # Exemplar e Quantidade ficam sem validação rígida de teclado para não bloquear digitação
+    def _validate_numero_edit(action, new_value):
+        if action == '0':  # deleção
+            return True
+        s = new_value.strip()
+        if s == '':
+            return True
+        return s.isdigit()
+
     for key, value in item_values.items():
         if key == 'Registro':
             label = ttk.Label(edit_window, text=f"{key}:")
@@ -407,6 +486,16 @@ def editar_registro():
             entry = ttk.Entry(edit_window, width=40)
             entry.grid(row=i // 2, column=(i % 2) * 2 + 1, padx=10, pady=5, sticky='ew')
             entry.insert(0, value)
+
+            # Aplica máscara de data na edição
+            if key == 'Data':
+                entry.bind('<KeyRelease>', lambda e, widget=entry: _on_date_keyrelease_edit(e, widget=widget))
+
+            # Aplica validação para campos numéricos inteiros principais na edição
+            if key in ['Número', 'Volume', 'Ano']:
+                vcmd_edit = (edit_window.register(_validate_numero_edit), '%d', '%P')
+                entry.configure(validate='key', validatecommand=vcmd_edit)
+
             edit_entries.append({'label': key, 'widget': entry})
             i += 1
     
@@ -439,6 +528,11 @@ def editar_registro():
         if 'Número' in novos_dados:
             novos_dados['Número'] = _normalize_numero_value(novos_dados.get('Número', ''))
 
+        # Normaliza campos numéricos inteiros adicionais na edição (Exemplar tratado como texto livre)
+        for campo_int in ['Volume', 'Ano', 'Quantidade']:
+            if campo_int in novos_dados:
+                novos_dados[campo_int] = _normalize_int_field(novos_dados.get(campo_int, ''))
+
         original_registro = item_values.get('Registro')
         original_tipologia = item_values.get('Tipologia')
         # Registro não é editável: mantém o original
@@ -452,6 +546,8 @@ def editar_registro():
                 messagebox.showerror("Erro", f"Arquivo de origem '{filename_origem}' não encontrado!", parent=edit_window)
                 return
             df_origem = pd.read_excel(filename_origem, dtype={'Registro': str})
+            # Normaliza nomes de colunas
+            df_origem.columns = [str(c).strip() for c in df_origem.columns]
             for col in all_columns:
                 if col not in df_origem.columns:
                     df_origem[col] = ""
@@ -494,6 +590,8 @@ def editar_registro():
                 filename_destino = get_filename_for_tipologia(nova_tipologia)
                 if os.path.exists(filename_destino):
                     df_destino = pd.read_excel(filename_destino, dtype={'Registro': str})
+                    # Normaliza nomes de colunas
+                    df_destino.columns = [str(c).strip() for c in df_destino.columns]
                 else:
                     df_destino = pd.DataFrame(columns=all_columns)
                 for col in all_columns:
@@ -517,7 +615,7 @@ def editar_registro():
                     df_destino['Registro'] = df_destino['Registro'].astype(str)
                 df_destino.to_excel(filename_destino, index=False)
 
-            messagebox.showinfo("Sucesso", "Registro atualizado com sucesso.", parent=edit_window)
+            messagebox.showinfo("Sucesso", "Alteração realizada com sucesso.", parent=edit_window)
             edit_window.destroy()
             atualizar_visualizacao_pesquisa()
         except Exception as e:
@@ -622,18 +720,19 @@ def create_registration_form(parent_tab, tipologia):
                         pass
             entry.bind('<KeyRelease>', _on_date_keyrelease)
 
-        # Validação leve para 'Número' (permite dígitos e separador decimal)
-        if campo_text == 'Número':
-            def _validate_numero(action, new_value):
+        # Validação para campos numéricos inteiros principais (somente dígitos, sem casas decimais)
+        # Exemplar e Quantidade ficam sem validação rígida de teclado para não bloquear digitação
+        if campo_text in ['Número', 'Volume', 'Ano']:
+            def _validate_inteiro(action, new_value):
                 # action: '1' -> inserção, '0' -> deleção
                 if action == '0':
                     return True
-                s = new_value.strip().replace(',', '.')
+                s = new_value.strip()
                 if s == '':
                     return True
-                return bool(re.match(r'^\\d*(?:\\.\\d*)?$', s))
-            vcmd = (parent_tab.register(_validate_numero), '%d', '%P')
-            entry.configure(validate='key', validatecommand=vcmd)
+                return s.isdigit()
+            vcmd_int = (parent_tab.register(_validate_inteiro), '%d', '%P')
+            entry.configure(validate='key', validatecommand=vcmd_int)
 
         entries.append({'label': campo_text, 'widget': entry})
 
@@ -679,9 +778,20 @@ if not _license_valid():
 header_frame = tk.Frame(app, bg='#ff6666')
 header_frame.pack(side=tk.TOP, fill=tk.X)
 
-# Tenta carregar e adicionar a imagem do logo
+# Tenta carregar e adicionar a imagem do logo (prioriza arquivo local ao lado do app)
 try:
-    image_path = r'C:\Users\Wenderson Barboza\OneDrive\Área de Trabalho\fcja2.jpg'
+    # Base do app: quando empacotado (PyInstaller) usa sys._MEIPASS; senão pasta do script
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base_dir = sys._MEIPASS
+    elif getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    local_image_path = os.path.join(base_dir, 'fcja2.jpg')
+    legacy_image_path = r'C:\Users\Wenderson Barboza\OneDrive\Área de Trabalho\fcja2.jpg'
+
+    image_path = local_image_path if os.path.exists(local_image_path) else legacy_image_path
     original_image = Image.open(image_path)
     # Redimensiona a imagem para uma altura de 60 pixels (um pouco maior)
     h_size = 60
