@@ -17,3 +17,10 @@ Thumbs.db
 
 # Projeto: planilhas geradas
 biblioteca_*.xlsx
+
+# Build / distribuição (não precisa ir pro GitHub)
+build/
+dist/
+*.exe
+*.pkg
+*.zip
